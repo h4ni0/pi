@@ -1,0 +1,23 @@
+{
+  "lastChangelogVersion": "0.79.10",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.5",
+  "hideThinkingBlock": true,
+  "defaultThinkingLevel": "xhigh",
+  "packages": [
+    "npm:pi-tool-display"
+  ],
+  "editorPaddingX": 0,
+  "terminal": {
+    "showTerminalProgress": true
+  },
+  "steeringMode": "one-at-a-time",
+  "quietStartup": true,
+  "enableInstallTelemetry": false,
+  "doubleEscapeAction": "tree",
+  "treeFilterMode": "no-tools",
+  "warnings": {
+    "anthropicExtraUsage": true
+  },
+  "theme": "hypr-waves"
+}

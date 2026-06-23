@@ -1,0 +1,14 @@
+export const EXTENSION_KEY = "subagents";
+export const SUBAGENTS_GLOBAL_STATUS_KEY = "__pi_subagents_status_v1";
+export const COMPLETION_MESSAGE_TYPE = "subagents.completion";
+export const NOTICE_MESSAGE_TYPE = "subagents.notice";
+export const QUESTION_MESSAGE_TYPE = "subagents.question";
+export const ASK_PARENT_EXCHANGE_MESSAGE_TYPE = "subagents.ask_parent_exchange";
+export const ASK_PARENT_ESCALATE_OPEN = "<ask_parent_escalate>";
+export const ASK_PARENT_ESCALATE_CLOSE = "</ask_parent_escalate>";
+export const DEFAULT_RETURN_MAX_BYTES = 50_000;
+export const EVENT_LOG_LIMIT = 240;
+export const BRIDGE_POLL_MS = 300;
+export const ASK_PARENT_POLL_MS = 250;
+export const CHILD_STOP_GRACE_MS = 1_500;
+export const DEFAULT_CHILD_TOOLS = ["read", "bash", "edit", "write"];
