@@ -6,7 +6,13 @@ import path from "node:path";
 const FAST_SERVICE_TIER = "priority";
 const SUPPORTED_PROVIDERS = new Set(["openai", "openai-codex"]);
 const SUPPORTED_APIS = new Set(["openai-responses", "openai-codex-responses"]);
-const SUPPORTED_MODEL_IDS = new Set(["gpt-5.4", "gpt-5.5"]);
+const SUPPORTED_MODEL_IDS = new Set([
+  "gpt-5.4",
+  "gpt-5.5",
+  "gpt-5.6-luna",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+]);
 
 const STORE_PATH = path.join(os.homedir(), ".pi", "fast-mode.json");
 

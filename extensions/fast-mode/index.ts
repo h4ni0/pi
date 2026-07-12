@@ -29,7 +29,7 @@ async function handleFastCommand(args: string, ctx: ExtensionCommandContext) {
 
 export default function fastModeExtension(pi: ExtensionAPI) {
   pi.registerCommand("fast", {
-    description: "Toggle Fast mode for supported GPT-5.5/5.4 models",
+    description: "Toggle Fast mode for supported GPT-5.6/5.5/5.4 models",
     getArgumentCompletions(prefix) {
       const p = prefix.trim().toLowerCase();
       const items = [

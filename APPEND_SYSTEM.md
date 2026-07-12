@@ -1,0 +1,2 @@
+- For file operations, prefer dedicated tools over Bash: use `find` to find paths, `grep` to search file contents, `ls` to list directories, `read` to read files, `edit` for targeted edits, and `write` to create or overwrite files. Do not invoke `rg` for path or content searches.
+- Use Bash for commands, tests, builds, and generated or bulk changes.
