@@ -39,17 +39,32 @@ const DEFAULT_PENDING_REQUEST_LIMIT = 1_024;
 const DEFAULT_TOMBSTONE_LIMIT = 1_024;
 const DEFAULT_UI_CANCEL_LIMIT = 1_024;
 const BWRAP_PATH = "/usr/bin/bwrap";
+const SYSTEMD_RUN_PATH = "/usr/bin/systemd-run";
+const SYSTEMD_SCOPE_CGROUP = "__pi_systemd_scope__";
 
 const CGROUP_WRAPPER_SOURCE = String.raw`
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const [cgroupPath, command, ...args] = process.argv.slice(1);
-try {
-  fs.writeFileSync(path.join(cgroupPath, "cgroup.procs"), String(process.pid));
-} catch (error) {
-  console.error("RPC cgroup join failed:", error?.message ?? String(error));
-  process.exit(126);
+let [cgroupPath, command, ...args] = process.argv.slice(1);
+const systemdManaged = cgroupPath === "__pi_systemd_scope__";
+if (systemdManaged) {
+  const membership = fs.readFileSync("/proc/self/cgroup", "utf8")
+    .split(/\r?\n/)
+    .find((line) => line.startsWith("0::"))
+    ?.slice(3);
+  if (!membership?.startsWith("/")) {
+    console.error("RPC systemd scope has no cgroup-v2 membership");
+    process.exit(126);
+  }
+  cgroupPath = path.resolve("/sys/fs/cgroup", "." + membership);
+} else {
+  try {
+    fs.writeFileSync(path.join(cgroupPath, "cgroup.procs"), String(process.pid));
+  } catch (error) {
+    console.error("RPC cgroup join failed:", error?.message ?? String(error));
+    process.exit(126);
+  }
 }
 const child = spawn("/usr/bin/bwrap", [
   "--die-with-parent",
@@ -86,11 +101,13 @@ child.once("error", (error) => {
 });
 child.once("exit", (code, signal) => {
   try {
-    fs.writeFileSync(
-      path.join(path.dirname(cgroupPath), "cgroup.procs"),
-      String(process.pid),
-    );
-    fs.writeFileSync(path.join(cgroupPath, "cgroup.kill"), "1");
+    if (!systemdManaged) {
+      fs.writeFileSync(
+        path.join(path.dirname(cgroupPath), "cgroup.procs"),
+        String(process.pid),
+      );
+      fs.writeFileSync(path.join(cgroupPath, "cgroup.kill"), "1");
+    }
   } catch { /* Parent-side teardown retains the same cgroup handle. */ }
   if (signal) {
     process.removeAllListeners(signal);
@@ -204,6 +221,8 @@ export interface RpcProcessOptions {
   tombstoneLimit?: number;
   uiCancelLimit?: number;
   lifecycleCorrelationTimeoutMs?: number;
+  /** Internal regression seam for non-delegated login-session cgroups. */
+  forceSystemdScope?: boolean;
   spawnProcess?: RpcSpawnProcess;
 }
 
@@ -255,6 +274,7 @@ export class RpcProcess {
   private ownsProcessGroup = false;
   private ownsOsProcessTree = false;
   private ownedCgroupPath?: string;
+  private ownedCgroupManagedExternally = false;
   private leaderStartTime?: string;
   private readonly ownedDescendantPids = new Map<number, string>();
   private stopping = false;
@@ -311,6 +331,8 @@ export class RpcProcess {
     this.ignoreDeferredRejections();
 
     let proc: ChildProcessWithoutNullStreams;
+    let discoverSystemdScope = false;
+    let systemdScopeUnit: string | undefined;
     try {
       const spawnProcess = this.options.spawnProcess ?? defaultSpawnProcess;
       const detached = !this.options.spawnProcess && process.platform !== "win32";
@@ -329,18 +351,61 @@ export class RpcProcess {
           );
         }
       }
-      this.ownedCgroupPath = requiresOwnedTree ? createOwnedCgroup() : undefined;
-      if (requiresOwnedTree && !this.ownedCgroupPath)
-        throw new Error(
-          "Persistent RPC process-tree ownership requires a writable delegated cgroup v2 with cgroup.kill",
-        );
-      const command = this.ownedCgroupPath ? process.execPath : this.command;
+      this.ownedCgroupPath = requiresOwnedTree && !this.options.forceSystemdScope
+        ? createOwnedCgroup()
+        : undefined;
+      discoverSystemdScope = requiresOwnedTree && !this.ownedCgroupPath;
+      if (discoverSystemdScope) {
+        systemdScopeUnit =
+          `pi-subagent-rpc-${process.pid}-${Date.now()}-${++cgroupSequence}`;
+        try {
+          accessSync(SYSTEMD_RUN_PATH, fsConstants.X_OK);
+        } catch {
+          throw new Error(
+            "Persistent RPC process-tree ownership requires executable /usr/bin/systemd-run when the current cgroup is not delegated",
+          );
+        }
+      }
+      const command = this.ownedCgroupPath
+        ? process.execPath
+        : discoverSystemdScope
+          ? SYSTEMD_RUN_PATH
+          : this.command;
       const args = this.ownedCgroupPath
         ? ["-e", CGROUP_WRAPPER_SOURCE, this.ownedCgroupPath, this.command, ...this.args]
-        : this.args;
+        : discoverSystemdScope
+          ? [
+              "--user",
+              "--scope",
+              "--quiet",
+              "--collect",
+              "--unit",
+              systemdScopeUnit!,
+              "-p",
+              "Delegate=yes",
+              "--",
+              process.execPath,
+              "-e",
+              CGROUP_WRAPPER_SOURCE,
+              SYSTEMD_SCOPE_CGROUP,
+              this.command,
+              ...this.args,
+            ]
+          : this.args;
+      const childEnv = buildChildEnvironment(
+        this.options.env,
+        this.options.envAllowlist,
+      );
+      if (discoverSystemdScope) {
+        const runtimeDir = process.env.XDG_RUNTIME_DIR ??
+          (typeof process.getuid === "function" ? `/run/user/${process.getuid()}` : undefined);
+        if (runtimeDir) childEnv.XDG_RUNTIME_DIR = runtimeDir;
+        childEnv.DBUS_SESSION_BUS_ADDRESS = process.env.DBUS_SESSION_BUS_ADDRESS ??
+          (runtimeDir ? `unix:path=${runtimeDir}/bus` : undefined);
+      }
       proc = spawnProcess(command, args, {
         cwd: this.options.cwd,
-        env: buildChildEnvironment(this.options.env, this.options.envAllowlist),
+        env: childEnv,
         stdio: ["pipe", "pipe", "pipe"],
         shell: false,
         detached,
@@ -358,9 +423,17 @@ export class RpcProcess {
     this.attachProcess(proc);
 
     try {
-      await this.getState(
-        this.options.startupTimeoutMs ?? DEFAULT_RPC_STARTUP_TIMEOUT_MS,
-      );
+      const startupTimeout =
+        this.options.startupTimeoutMs ?? DEFAULT_RPC_STARTUP_TIMEOUT_MS;
+      if (discoverSystemdScope && proc.pid) {
+        this.ownedCgroupManagedExternally = true;
+        this.ownedCgroupPath = await waitForDelegatedProcessCgroup(
+          proc.pid,
+          `${systemdScopeUnit}.scope`,
+          startupTimeout,
+        );
+      }
+      await this.getState(startupTimeout);
       if (this.transportError) throw this.transportError;
       if (this.isTerminated(proc))
         throw new Error("RPC process terminated during startup handshake");
@@ -1264,11 +1337,15 @@ export class RpcProcess {
     const cgroupPath = this.ownedCgroupPath;
     if (!cgroupPath) return;
     try {
-      removeEmptyCgroupTree(cgroupPath);
+      if (this.ownedCgroupManagedExternally)
+        removeEmptyCgroupChildren(cgroupPath);
+      else removeEmptyCgroupTree(cgroupPath);
       this.ownedCgroupPath = undefined;
+      this.ownedCgroupManagedExternally = false;
     } catch (error: any) {
       if (error?.code === "ENOENT") {
         this.ownedCgroupPath = undefined;
+        this.ownedCgroupManagedExternally = false;
         return;
       }
       if (required)
@@ -1317,12 +1394,88 @@ function canLaunchThroughWrapper(command: string): boolean {
   }
 }
 
-function removeEmptyCgroupTree(cgroupPath: string): void {
+function removeEmptyCgroupChildren(cgroupPath: string): void {
   for (const entry of readdirSync(cgroupPath, { withFileTypes: true })) {
     if (entry.isDirectory())
       removeEmptyCgroupTree(path.join(cgroupPath, entry.name));
   }
+}
+
+function removeEmptyCgroupTree(cgroupPath: string): void {
+  removeEmptyCgroupChildren(cgroupPath);
   rmdirSync(cgroupPath);
+}
+
+function processCgroupPath(pid: number): string | undefined {
+  try {
+    const membership = readFileSync(`/proc/${pid}/cgroup`, "utf8")
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("0::"))
+      ?.slice(3);
+    if (!membership?.startsWith("/")) return undefined;
+    const cgroupRoot = "/sys/fs/cgroup";
+    const candidate = path.resolve(cgroupRoot, `.${membership}`);
+    if (candidate !== cgroupRoot && !candidate.startsWith(`${cgroupRoot}${path.sep}`))
+      return undefined;
+    return candidate;
+  } catch {
+    return undefined;
+  }
+}
+
+function findUserScopeCgroup(expectedBasename: string): string | undefined {
+  if (typeof process.getuid !== "function") return undefined;
+  const root = path.join(
+    "/sys/fs/cgroup/user.slice",
+    `user-${process.getuid()}.slice`,
+    `user@${process.getuid()}.service`,
+  );
+  const pending: Array<{ directory: string; depth: number }> = [
+    { directory: root, depth: 0 },
+  ];
+  let inspected = 0;
+  while (pending.length > 0 && inspected++ < 256) {
+    const current = pending.pop()!;
+    let entries;
+    try {
+      entries = readdirSync(current.directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const candidate = path.join(current.directory, entry.name);
+      if (entry.name === expectedBasename) return candidate;
+      if (current.depth < 3)
+        pending.push({ directory: candidate, depth: current.depth + 1 });
+    }
+  }
+  return undefined;
+}
+
+async function waitForDelegatedProcessCgroup(
+  pid: number,
+  expectedBasename: string,
+  timeoutMs: number,
+): Promise<string> {
+  const deadline = Date.now() + Math.max(250, timeoutMs);
+  while (Date.now() < deadline) {
+    const processCandidate = processCgroupPath(pid);
+    const candidate = processCandidate && path.basename(processCandidate) === expectedBasename
+      ? processCandidate
+      : findUserScopeCgroup(expectedBasename);
+    if (candidate) {
+      try {
+        accessSync(path.join(candidate, "cgroup.procs"), fsConstants.W_OK);
+        accessSync(path.join(candidate, "cgroup.kill"), fsConstants.W_OK);
+        return candidate;
+      } catch {
+        // systemd has not completed Delegate= ownership yet.
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out acquiring delegated systemd RPC scope");
 }
 
 function createOwnedCgroup(): string | undefined {

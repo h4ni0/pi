@@ -497,6 +497,9 @@ describe("tool descriptions and prompt guidance", () => {
       "Asynchronously spawn a persistent, reusable agent with a canonical task name and fork_turns context.",
     );
     expect(byName.get("spawn_agent")?.promptGuidelines).toContain(
+      "In a fresh runtime, prove startup with one agent before issuing a parallel fan-out; if startup fails, stop spawning and diagnose the shared runtime instead of retrying with delegate.",
+    );
+    expect(byName.get("spawn_agent")?.promptGuidelines).toContain(
       "Unlike disposable delegate, spawn_agent returns a persistent canonical task name for send_message and followup_task.",
     );
     expect(byName.get("spawn_agent")?.promptGuidelines).toContain(
@@ -507,6 +510,9 @@ describe("tool descriptions and prompt guidance", () => {
     );
     expect(byName.get("delegate")?.promptGuidelines).toContain(
       "Use delegate only for a blocking one-shot task; unlike spawn_agent, a returned delegate is disposable, non-reusable, and non-targetable.",
+    );
+    expect(byName.get("delegate")?.promptGuidelines).toContain(
+      "Do not use delegate as a fallback after spawn_agent startup failure; diagnose or report the shared runtime failure before any further delegation.",
     );
     const allGuidance = tools
       .flatMap((tool) => [
@@ -529,6 +535,7 @@ describe("tool descriptions and prompt guidance", () => {
       "These user-requested terminal wait modes intentionally differ from Codex v2's mailbox wait.",
       "interrupt_agent is a reusable, non-cascading turn interrupt.",
       "All agents share the same cwd and filesystem.",
+      "In a fresh runtime, prove startup with one agent before expanding in small batches; after any startup failure, stop delegating",
     ])
       expect(prompt).toContain(required);
   });

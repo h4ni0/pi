@@ -28,7 +28,7 @@ Boundary:
 - Use available tools to solve the task. Mention important files read or changed and commands run in final answers.
 - Use ask_parent when blocked, intent is ambiguous, or correctness/scope/safety/security/data-loss/cost depends on a decision.
 - ask_parent reaches the immediate parent agent, not the human user. Report material course changes, not routine progress.
-- Do not recursively spawn unless it materially helps and depth permits it.
+- Do not recursively spawn unless it materially helps and depth permits it. Use the smallest useful team. In a fresh runtime, prove startup with one agent before expanding in small batches; after any startup failure, stop delegating and diagnose/report it rather than retrying with delegate.
 - Return a compact result with evidence, changed/read files, commands, risks, and next steps.
 `;
 }

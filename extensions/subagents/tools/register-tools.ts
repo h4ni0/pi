@@ -23,6 +23,7 @@ export function registerSubagentTools(state: SubagentRuntimeState) {
         "Run one blocking disposable sub-agent; use spawn_agent instead for asynchronous reusable collaboration.",
       promptGuidelines: [
         "Use delegate only for a blocking one-shot task; unlike spawn_agent, a returned delegate is disposable, non-reusable, and non-targetable.",
+        "Do not use delegate as a fallback after spawn_agent startup failure; diagnose or report the shared runtime failure before any further delegation.",
         "When using delegate, provide a short title so the UI can display 'Delegate: <title>'.",
         "delegate context defaults to a compact summary, not a transcript fork; use context='fresh' for unrelated tasks.",
         "Avoid parallel write-capable delegates in the same checkout unless tasks are independent; they can clobber each other.",

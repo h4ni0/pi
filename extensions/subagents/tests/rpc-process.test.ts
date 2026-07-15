@@ -613,6 +613,21 @@ describe("RpcProcess transport and OS invariants", () => {
     }
   });
 
+  test("acquires a delegated systemd scope from a non-delegated login session", async () => {
+    if (process.platform !== "linux" || !fs.existsSync("/usr/bin/systemd-run")) return;
+    const client = realProcess({}, {
+      forceSystemdScope: true,
+      startupTimeoutMs: 3_000,
+      shutdownTimeoutMs: 500,
+    });
+    await client.start();
+    const cgroupPath = (client as any).ownedCgroupPath as string;
+    expect((client as any).ownedCgroupManagedExternally).toBe(true);
+    expect(path.basename(cgroupPath)).toMatch(/^pi-subagent-rpc-.*\.scope$/);
+    await client.stop();
+    expect((client as any).ownedCgroupPath).toBeUndefined();
+  });
+
   test("sandbox prevents the same-UID RPC child from escaping its owned cgroup", async () => {
     if (process.platform !== "linux") return;
     const resultFile = path.join(

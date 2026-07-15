@@ -127,6 +127,8 @@ export function registerCollaborationTools(state: SubagentRuntimeState): void {
       "Asynchronously spawn a persistent, reusable agent with a canonical task name and fork_turns context.",
     promptGuidelines: [
       "Use spawn_agent for concrete bounded work that can run independently; it returns asynchronously and the agent remains reusable.",
+      "In a fresh runtime, prove startup with one agent before issuing a parallel fan-out; if startup fails, stop spawning and diagnose the shared runtime instead of retrying with delegate.",
+      "Use the smallest useful team and expand in small batches rather than launching every conceivable reviewer at once.",
       "Unlike disposable delegate, spawn_agent returns a persistent canonical task name for send_message and followup_task.",
       "Persistence is runtime-scoped: /reload, resume, fork, or a new Pi runtime invalidates prior live handles; use list_agents and spawn replacements.",
       "All spawn_agent agents share cwd/filesystem; parallel research should be read-only and parallel writers need disjoint paths or worktrees.",
