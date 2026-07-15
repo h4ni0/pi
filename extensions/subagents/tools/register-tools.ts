@@ -3,25 +3,28 @@ import { AskParentParams, DelegateParams } from "../schemas.ts";
 import { OneLineList, renderToolTree } from "../render-utils.ts";
 import type { DelegateDetails } from "../types.ts";
 import { generatedLabel, oneLine } from "../utils.ts";
-import { askParentViaBridge } from "../runtime/ask-parent.ts";
 import { spawnDelegate } from "../runtime/launcher.ts";
 import type { SubagentRuntimeState } from "../runtime/state.ts";
+import { registerCollaborationTools } from "./register-collaboration-tools.ts";
 
 export function registerSubagentTools(state: SubagentRuntimeState) {
   const { pi } = state;
 
-  if (state.currentDepth < state.settings.maxDepth && state.settings.allowChildSubagents) {
-    pi.registerTool({
+  registerCollaborationTools(state);
+
+  // Registered everywhere so trusted settings can activate it dynamically;
+  // applyRoleActiveTools withholds it at/above the effective depth limit.
+  pi.registerTool({
       name: "delegate",
       label: "Delegate",
       description:
-        "Spawn one general-purpose sub-agent in a separate Pi RPC subprocess. Default context is a compact parent handoff summary; use fresh only for unrelated work. Multiple delegate tool calls may run concurrently.",
+        "Run one blocking, disposable, one-shot compatibility sub-agent. It returns its bounded result inline, then closes and cannot be reused or targeted. Context is a compact parent handoff by default or fresh when requested.",
       promptSnippet:
-        "Spawn one focused general-purpose sub-agent with compact parent handoff by default.",
+        "Run one blocking disposable sub-agent; use spawn_agent instead for asynchronous reusable collaboration.",
       promptGuidelines: [
-        "Use delegate only when a separate focused agent materially helps; do not delegate routine tiny steps.",
+        "Use delegate only for a blocking one-shot task; unlike spawn_agent, a returned delegate is disposable, non-reusable, and non-targetable.",
         "When using delegate, provide a short title so the UI can display 'Delegate: <title>'.",
-        "delegate context defaults to compact summary only, not full transcript; use context='fresh' for unrelated tasks.",
+        "delegate context defaults to a compact summary, not a transcript fork; use context='fresh' for unrelated tasks.",
         "Avoid parallel write-capable delegates in the same checkout unless tasks are independent; they can clobber each other.",
       ],
       parameters: DelegateParams,
@@ -38,10 +41,12 @@ export function registerSubagentTools(state: SubagentRuntimeState) {
           `${theme.fg("toolTitle", theme.bold("Delegate:"))} ${theme.fg("accent", title)}`,
         ]);
       },
-      renderResult(result, _options, theme) {
+      renderResult(result, options, theme) {
+        const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+        if (options.expanded)
+          return new Text(theme.fg("toolOutput", text), 0, 0);
         const details = result.details as DelegateDetails | undefined;
         if (!details) {
-          const text = result.content[0]?.type === "text" ? result.content[0].text : "";
           return new OneLineList(
             text ? [theme.fg("toolOutput", oneLine(text, 220))] : [],
           );
@@ -52,7 +57,6 @@ export function registerSubagentTools(state: SubagentRuntimeState) {
         return new OneLineList(lines);
       },
     });
-  }
 
   if (state.isChild) {
     pi.registerTool({
@@ -71,8 +75,9 @@ export function registerSubagentTools(state: SubagentRuntimeState) {
       parameters: AskParentParams,
       executionMode: "sequential",
       async execute(_toolCallId, params, signal) {
-        const answer = await askParentViaBridge(
-          state,
+        const broker = state.broker;
+        if (!broker) throw new Error("Authenticated parent broker is unavailable");
+        const answer = await broker.askParent(
           {
             message: params.message,
             reason: params.reason,

@@ -1,9 +1,14 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { generateSummary, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { CompletionPayload, SubagentRecord, SubagentSettings } from "../types.ts";
-import { bytes, formatTokens, oneLine } from "../utils.ts";
+import {
+  bytes,
+  formatTokens,
+  oneLine,
+  safeWriteText,
+  truncateUtf8,
+} from "../utils.ts";
 
 export function extractiveOutputSummary(output: string, maxBytes: number): string {
   const lines = output
@@ -40,10 +45,12 @@ export async function summarizeOutputForPayload(
   signal?: AbortSignal,
   thinkingLevel?: ThinkingLevel,
 ): Promise<{ text: string; summarized: boolean }> {
+  throwIfAborted(signal);
   const model = ctx?.model;
   if (model) {
     try {
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      throwIfAborted(signal);
       if (auth.ok) {
         const synthetic = [
           {
@@ -63,12 +70,16 @@ export async function summarizeOutputForPayload(
           undefined,
           thinkingLevel,
         );
+        throwIfAborted(signal);
         return { text: summary, summarized: true };
       }
-    } catch {
-      // Deterministic fallback below.
+    } catch (error) {
+      if (signal?.aborted || (error instanceof Error && error.name === "AbortError"))
+        throw error;
+      // Deterministic fallback only for genuine summarizer/auth failures.
     }
   }
+  throwIfAborted(signal);
   return {
     text: extractiveOutputSummary(
       output,
@@ -83,24 +94,22 @@ export function buildCompletionPayload(
   payloadOutput: string,
   settings: SubagentSettings,
   summarized: boolean,
+  outputPath?: string,
 ): string {
   const lines = [
     `Sub-agent ${record.id} (${record.generatedLabel}) ${record.status}.`,
-    `Task: ${oneLine(record.task, 1_200)}`,
+    `Task: ${oneLine(record.task, 400)}`,
     `Context: ${record.contextMode}`,
     `Depth: ${record.depth}/${settings.maxDepth}`,
   ];
-  if (record.sessionFile) lines.push(`Session: ${record.sessionFile}`);
-  if (record.sessionDir) lines.push(`Session dir: ${record.sessionDir}`);
+  if (record.sessionFile) lines.push(`Session: ${oneLine(record.sessionFile, 600)}`);
+  if (record.sessionDir) lines.push(`Session dir: ${oneLine(record.sessionDir, 600)}`);
   if (record.model || record.thinkingLevel)
     lines.push(
       `Model: ${[record.model, record.thinkingLevel ? `thinking=${record.thinkingLevel}` : undefined].filter(Boolean).join(" ")}`,
     );
-  const outputPath = record.sessionDir
-    ? path.join(record.sessionDir, "final-output.md")
-    : undefined;
-  if (outputPath) lines.push(`Full final output: ${outputPath}`);
-  if (record.error) lines.push(`Error: ${record.error}`);
+  if (outputPath) lines.push(`Full final output: ${oneLine(outputPath, 600)}`);
+  if (record.error) lines.push(`Error: ${oneLine(record.error, 600)}`);
   if (record.usage) {
     const usageParts = [
       record.usage.input !== undefined ? `input=${formatTokens(record.usage.input)}` : undefined,
@@ -130,31 +139,47 @@ export async function makeCompletionPayload(
   signal?: AbortSignal,
   thinkingLevel?: ThinkingLevel,
 ): Promise<CompletionPayload> {
+  throwIfAborted(signal);
   let output = record.finalOutput ?? "";
   let outputPath: string | undefined;
   if (record.sessionDir) {
     outputPath = path.join(record.sessionDir, "final-output.md");
     try {
-      fs.writeFileSync(outputPath, output, { encoding: "utf8", mode: 0o600 });
+      throwIfAborted(signal);
+      safeWriteText(outputPath, output);
+      throwIfAborted(signal);
     } catch {
       outputPath = undefined;
     }
   }
   let payloadOutput = output;
   let wasSummarized = false;
-  if (bytes(buildCompletionPayload(record, payloadOutput, settings, false)) > settings.returnMaxBytes) {
+  if (bytes(buildCompletionPayload(record, payloadOutput, settings, false, outputPath)) > settings.returnMaxBytes) {
     const summary = await summarizeOutputForPayload(output, ctx, settings, signal, thinkingLevel);
+    throwIfAborted(signal);
     payloadOutput = summary.text;
     wasSummarized = summary.summarized;
   }
-  let payload = buildCompletionPayload(record, payloadOutput, settings, wasSummarized);
+  let payload = buildCompletionPayload(
+    record,
+    payloadOutput,
+    settings,
+    wasSummarized,
+    outputPath,
+  );
   if (bytes(payload) > settings.returnMaxBytes) {
     payloadOutput = extractiveOutputSummary(
       payloadOutput,
       Math.max(1_000, Math.floor(settings.returnMaxBytes * 0.6)),
     );
     wasSummarized = true;
-    payload = buildCompletionPayload(record, payloadOutput, settings, wasSummarized);
+    payload = buildCompletionPayload(
+      record,
+      payloadOutput,
+      settings,
+      wasSummarized,
+      outputPath,
+    );
   }
   let tightenAttempts = 0;
   while (bytes(payload) > settings.returnMaxBytes && tightenAttempts < 4) {
@@ -168,14 +193,23 @@ export async function makeCompletionPayload(
       `${payloadOutput}\n\n[Further summarized to fit returnMaxBytes. Full output remains on disk.]`,
       settings,
       true,
+      outputPath,
     );
     tightenAttempts++;
   }
   if (bytes(payload) > settings.returnMaxBytes) {
     payloadOutput =
       "The child completed, but even the summarized payload exceeded returnMaxBytes. Use the referenced child session/final-output file for the full result.";
-    payload = buildCompletionPayload(record, payloadOutput, settings, true);
+    payload = buildCompletionPayload(
+      record,
+      payloadOutput,
+      settings,
+      true,
+      outputPath,
+    );
   }
+  throwIfAborted(signal);
+  payload = truncateUtf8(payload, settings.returnMaxBytes);
   return {
     id: record.id,
     label: record.generatedLabel,
@@ -195,4 +229,11 @@ export async function makeCompletionPayload(
     thinkingLevel: record.thinkingLevel,
     error: record.error,
   };
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const error = new Error("Completion payload aborted");
+  error.name = "AbortError";
+  throw error;
 }

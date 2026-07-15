@@ -14,7 +14,9 @@ export class ChildConsoleOverlay implements Component {
   constructor(
     private readonly theme: Theme,
     private readonly record: SubagentRecord,
-    private readonly done: (value: { action: "send" | "abort" } | undefined) => void,
+    private readonly done: (
+      value: { action: "message" | "followup" | "interrupt" } | undefined,
+    ) => void,
     private readonly requestRender: () => void,
     private readonly getBodyRows: () => number = () => 24,
   ) {
@@ -29,7 +31,7 @@ export class ChildConsoleOverlay implements Component {
     const lines = [
       `${t.fg("toolTitle", t.bold("Sub-agent"))} ${t.fg("accent", this.record.generatedLabel || this.record.id)}`,
       `${statusText(this.record.status, t)} ${t.fg("dim", `depth ${this.record.depth} · ${formatDuration((this.record.endedAt ?? now()) - this.record.createdAt)}`)}`,
-      t.fg("dim", "i/s compose steer · a abort · r refresh · Esc return to parent"),
+      t.fg("dim", "m message · f follow-up · i interrupt · r refresh · Esc return"),
       "",
     ];
     const rendered = renderToolTree(this.record.events, t, 180, Number.POSITIVE_INFINITY);
@@ -63,8 +65,9 @@ export class ChildConsoleOverlay implements Component {
       this.invalidate();
       return;
     }
-    if (data === "i" || data === "s") this.done({ action: "send" });
-    if (data === "a") this.done({ action: "abort" });
+    if (data === "m") this.done({ action: "message" });
+    if (data === "f") this.done({ action: "followup" });
+    if (data === "i") this.done({ action: "interrupt" });
     if (data === "r") this.invalidate();
   }
 

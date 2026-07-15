@@ -4,16 +4,35 @@ import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import {
   ASK_PARENT_EXCHANGE_MESSAGE_TYPE,
   COMPLETION_MESSAGE_TYPE,
+  LEGACY_COMPLETION_MESSAGE_TYPE,
   NOTICE_MESSAGE_TYPE,
   QUESTION_MESSAGE_TYPE,
 } from "./constants.ts";
 import { OneLineList } from "./render-utils.ts";
-import type { CompletionPayload } from "./types.ts";
+import type { CompletionActivity, CompletionPayload } from "./types.ts";
 import { oneLine } from "./utils.ts";
 
 export function registerSubagentMessageRenderers(pi: ExtensionAPI): void {
   pi.registerMessageRenderer(
     COMPLETION_MESSAGE_TYPE,
+    (message, options, theme) => {
+      const details = message.details as CompletionActivity | undefined;
+      const content = typeof message.content === "string" ? message.content : "";
+      if (options.expanded)
+        return new Markdown(content, 0, 0, getMarkdownTheme());
+      const sender = details?.agent_name ?? "child";
+      const turn = details?.turn_id ?? "turn";
+      const outcome = details?.outcome ?? "completed";
+      const snippet = details?.output || content;
+      return new OneLineList([
+        `${theme.fg("toolTitle", theme.bold("Agent final:"))} ${theme.fg("accent", sender)} ${theme.fg(outcome === "errored" ? "error" : "success", outcome)} ${theme.fg("dim", turn)}`,
+        ...(snippet ? [theme.fg("toolOutput", oneLine(snippet, 220))] : []),
+      ]);
+    },
+  );
+
+  pi.registerMessageRenderer(
+    LEGACY_COMPLETION_MESSAGE_TYPE,
     (message, _options, theme) => {
       const details = message.details as CompletionPayload | undefined;
       const content = typeof message.content === "string" ? message.content : "";

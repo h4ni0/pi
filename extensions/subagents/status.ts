@@ -11,6 +11,10 @@ export function globalSubagentsStatus(): GlobalSubagentsStatus {
     total: 0,
     waiting: 0,
     nested: 0,
+    idle: 0,
+    interrupted: 0,
+    errored: 0,
+    shutdown: 0,
     updatedAt: 0,
     listeners: new Set<() => void>(),
   };
@@ -21,11 +25,15 @@ export function globalSubagentsStatus(): GlobalSubagentsStatus {
 export function parseSubagentStatusCount(text: unknown): number {
   if (typeof text !== "string") return 0;
   const clean = stripAnsi(text);
-  const total = Number(clean.match(/agents\s+\d+\/(\d+)\s+running/i)?.[1] ?? 0);
+  const match = clean.match(/agents\s+(\d+)\/(\d+)(?:\s+running)?/i);
+  const running = Number(match?.[1] ?? 0);
+  const legacyTotal = Number(match?.[2] ?? 0);
+  const waiting = Number(clean.match(/(\d+)\s+waiting/i)?.[1] ?? 0);
   const nested = Number(clean.match(/(\d+)\s+nested/i)?.[1] ?? 0);
-  if (Number.isFinite(total) || Number.isFinite(nested))
+  const hasRetainedGroups = /\b(?:idle|shutdown)\b/i.test(clean);
+  if (match || Number.isFinite(nested))
     return (
-      (Number.isFinite(total) ? total : 0) +
+      (hasRetainedGroups ? running + waiting : legacyTotal) +
       (Number.isFinite(nested) ? nested : 0)
     );
   return 0;

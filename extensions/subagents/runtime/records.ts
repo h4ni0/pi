@@ -4,6 +4,7 @@ import type {
   DelegateDetails,
   LiveDelegateUpdater,
   RpcEvent,
+  RpcEventSummary,
   SubagentRecord,
   SubagentSettings,
   UsageStats,
@@ -18,14 +19,13 @@ import { argsSummary, now, oneLine } from "../utils.ts";
 import { updateStatus } from "./status-ui.ts";
 import type { SubagentRuntimeState } from "./state.ts";
 
-export function removeActiveWhenSettled(
-  state: SubagentRuntimeState,
+export function pushEventSummary(
   record: SubagentRecord,
-) {
-  if (!["completed", "failed", "aborted"].includes(record.status)) return;
-  clearInterval(record.bridgeTimer);
-  state.active.delete(record.id);
-  updateStatus(state);
+  summary: RpcEventSummary,
+): void {
+  record.events.push(summary);
+  if (record.events.length > EVENT_LOG_LIMIT)
+    record.events.splice(0, record.events.length - EVENT_LOG_LIMIT);
 }
 
 export function pushEvent(record: SubagentRecord, event: RpcEvent) {
@@ -71,9 +71,7 @@ export function pushEvent(record: SubagentRecord, event: RpcEvent) {
             ? record.events[replaceIndex].text
             : summary.text,
       };
-    else record.events.push(summary);
-    if (record.events.length > EVENT_LOG_LIMIT)
-      record.events.splice(0, record.events.length - EVENT_LOG_LIMIT);
+    else pushEventSummary(record, summary);
   }
   if (summary.text && event.type === "message_end") {
     record.lastMessageSnippet = summary.text;
@@ -92,33 +90,23 @@ export function pushEvent(record: SubagentRecord, event: RpcEvent) {
   }
 }
 
+/**
+ * Compatibility event projector. agent_end is deliberately informational;
+ * agent_settled is the only completion boundary.
+ */
 export function handleRpcEvent(
   state: SubagentRuntimeState,
   record: SubagentRecord,
   event: RpcEvent,
 ) {
+  // Compatibility-only projection: lifecycle authority belongs to
+  // reduceTurnLifecycle in turn-controller.ts.
   pushEvent(record, event);
   if (
     event.type === "extension_ui_request" &&
     event.method === "setStatus" &&
     event.statusKey === EXTENSION_KEY
-  ) {
-    record.nestedActiveCount = parseSubagentStatusCount(event.statusText);
-  }
-  switch (event.type) {
-    case "agent_start":
-      record.status = "running";
-      record.startedAt ??= now();
-      break;
-    case "agent_end":
-      if (record.status !== "aborted" && record.status !== "failed")
-        record.status = "completed";
-      record.endedAt = now();
-      break;
-    case "extension_error":
-      record.error = oneLine(event.error ?? "child extension error", 500);
-      break;
-  }
+  ) record.nestedActiveCount = parseSubagentStatusCount(event.statusText);
   updateStatus(state);
 }
 
@@ -132,7 +120,7 @@ export function toDelegateDetails(
     status: record.status,
     contextMode: record.contextMode,
     depth: record.depth,
-    maxDepth: currentSettings.maxDepth,
+    maxDepth: record.maxDepth ?? currentSettings.maxDepth,
     task: record.task,
     sessionFile: record.sessionFile,
     sessionDir: record.sessionDir,
@@ -165,9 +153,9 @@ export function makeLiveUpdater(
   return {
     notify(force = false) {
       if (closed) return;
-      const t = now();
-      if (!force && t - last < 500) return;
-      last = t;
+      const timestamp = now();
+      if (!force && timestamp - last < 500) return;
+      last = timestamp;
       try {
         onUpdate({
           content: [{ type: "text", text: renderProgress(record) }],
@@ -181,41 +169,6 @@ export function makeLiveUpdater(
       closed = true;
     },
   };
-}
-
-export async function sendToChild(
-  record: SubagentRecord,
-  message: string,
-): Promise<string> {
-  if (!record.client) throw new Error(`sub-agent ${record.id} is not connected`);
-  const state = await record.client.getState().catch(() => undefined);
-  if (state?.isStreaming) await record.client.steer(message);
-  else await record.client.prompt(message);
-  record.events.push({
-    type: "parent_steer",
-    timestamp: now(),
-    text: oneLine(message, 220),
-  });
-  return `Sent steering to ${record.id}.`;
-}
-
-export async function abortChild(
-  state: SubagentRuntimeState,
-  record: SubagentRecord,
-): Promise<string> {
-  if (record.client) {
-    try {
-      await record.client.abort();
-    } catch {
-      // process may already be gone
-    }
-    await record.client.stop().catch(() => undefined);
-  }
-  record.status = "aborted";
-  record.endedAt = now();
-  record.error = record.error ?? "Aborted by parent.";
-  updateStatus(state);
-  return `Aborted ${record.id}.`;
 }
 
 export function usageFromStats(stats: any): UsageStats {

@@ -23,7 +23,9 @@ export class AgentsOverlay implements Component {
     private readonly theme: Theme,
     private readonly getRecords: () => SubagentRecord[],
     private readonly done: (
-      value: { action: "steer" | "abort" | "enter"; id: string } | undefined,
+      value:
+        | { action: "message" | "followup" | "interrupt" | "enter"; id: string }
+        | undefined,
     ) => void,
     private readonly requestRender: () => void,
     private readonly getBodyRows: () => number = () => 22,
@@ -91,8 +93,18 @@ export class AgentsOverlay implements Component {
       this.invalidate();
       return;
     }
-    if ((data === "s" || data === "a" || data === "e") && records[this.selected]) {
-      const action = data === "s" ? "steer" : data === "a" ? "abort" : "enter";
+    if (
+      (data === "m" || data === "f" || data === "i" || data === "e") &&
+      records[this.selected]
+    ) {
+      const action =
+        data === "m"
+          ? "message"
+          : data === "f"
+            ? "followup"
+            : data === "i"
+              ? "interrupt"
+              : "enter";
       this.done({ action, id: records[this.selected].id });
     }
   }
@@ -140,13 +152,21 @@ export class AgentsOverlay implements Component {
     const lines = [
       t.fg(
         "dim",
-        `${records.length} active direct child${records.length === 1 ? "" : "ren"}${records.length > visibleCount ? ` · showing ${this.listScroll + 1}-${end}` : ""}`,
+        `${records.length} locally owned child${records.length === 1 ? "" : "ren"}${records.length > visibleCount ? ` · showing ${this.listScroll + 1}-${end}` : ""}`,
       ),
-      t.fg("dim", "Alt+S / /agents · Enter details · s compose · a abort · e enter · r refresh · Esc close"),
+      ...(records.length > 0
+        ? [
+            t.fg(
+              "warning",
+              "⚠ Session-runtime UI history · shared cwd/filesystem; parallel writers can clobber.",
+            ),
+          ]
+        : []),
+      t.fg("dim", "Enter details · m message · f follow-up · i interrupt · e enter · Esc"),
       "",
     ];
     if (records.length === 0) {
-      lines.push(t.fg("muted", "No active sub-agents."));
+      lines.push(t.fg("muted", "No locally owned sub-agents or retained UI history."));
       return lines;
     }
     if (this.listScroll > 0) lines.push(t.fg("dim", "↑ more"));
@@ -161,11 +181,13 @@ export class AgentsOverlay implements Component {
     const t = this.theme;
     const prefix = selected ? t.fg("accent", "› ") : t.fg("dim", "  ");
     const elapsed = formatDuration((record.endedAt ?? now()) - record.createdAt);
-    const title = `${prefix}${t.fg("toolTitle", t.bold("Sub-agent"))} ${t.fg("accent", this.label(record))}`;
+    const title = `${prefix}${t.fg("toolTitle", t.bold(record.agentName))} ${t.fg("dim", record.id)}`;
     const meta = [
       statusText(record.status, t),
       `t+${elapsed}`,
       `depth ${record.depth}`,
+      `turn ${record.turnCount}${record.currentTurnId ? `/${record.currentTurnId}` : ""}`,
+      record.mailbox.length ? `${record.mailbox.length} queued` : undefined,
       record.nestedActiveCount ? `${record.nestedActiveCount} nested active` : undefined,
       record.model,
       record.thinkingLevel ? `think ${record.thinkingLevel}` : undefined,
@@ -187,15 +209,17 @@ export class AgentsOverlay implements Component {
   private renderDetail(width: number, record: SubagentRecord, maxRows: number): string[] {
     const t = this.theme;
     const lines = [
-      `${t.fg("toolTitle", t.bold("Sub-agent"))} ${t.fg("accent", this.label(record))}`,
-      `${statusText(record.status, t)} ${t.fg("dim", `depth ${record.depth} · ${formatDuration((record.endedAt ?? now()) - record.createdAt)}`)}`,
+      `${t.fg("toolTitle", t.bold(record.agentName))} ${t.fg("dim", record.id)}`,
+      `${statusText(record.status, t)} ${t.fg("dim", `depth ${record.depth}/${record.maxDepth} · turn ${record.turnCount} ${record.currentTurnId ?? ""} · mailbox ${record.mailbox.length} · ${formatDuration((record.endedAt ?? now()) - record.createdAt)}`)}`,
+      record.sessionFile ? t.fg("dim", `session ${record.sessionFile}`) : "",
+      record.lastMessageSnippet ? t.fg("toolOutput", record.lastMessageSnippet) : "",
       "",
     ];
     const renderedEvents = renderToolTree(record.events, t, 180, Number.POSITIVE_INFINITY);
     const pageRows = Math.max(1, maxRows - 5);
     const visible = renderedEvents.slice(this.scroll, this.scroll + pageRows);
     if (visible.length > 0) lines.push(...visible);
-    lines.push("", t.fg("dim", "↑↓ scroll • s compose • a abort • e enter • Esc back"));
+    lines.push("", t.fg("dim", "↑↓ scroll • m message • f follow-up • i interrupt • e enter • Esc back"));
     return lines
       .slice(0, maxRows)
       .map((line) => truncateToWidth(line, Math.max(20, width - 2), "…", true));

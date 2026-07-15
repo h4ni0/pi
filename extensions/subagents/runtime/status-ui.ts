@@ -10,9 +10,10 @@ import { formatTokens, now, oneLine, stripAnsi } from "../utils.ts";
 import type { SubagentRuntimeState } from "./state.ts";
 
 export function activeRecords(state: SubagentRuntimeState) {
-  return Array.from(state.active.values()).filter(
-    (record) => !["completed", "failed", "aborted"].includes(record.status),
-  );
+  return [
+    ...state.active.values(),
+    ...state.history.values(),
+  ].sort((left, right) => left.updatedAt - right.updatedAt);
 }
 
 export function subagentStatusText(
@@ -29,11 +30,15 @@ export function subagentStatusText(
   ).length;
   const waiting = records.filter((r) => r.status === "waiting_for_answer").length;
   const nested = records.reduce((sum, r) => sum + (r.nestedActiveCount ?? 0), 0);
+  const idle = records.filter((r) => ["completed", "interrupted", "failed", "aborted"].includes(r.status)).length;
+  const shutdown = records.filter((r) => r.status === "shutdown").length;
   const total = records.length;
   const label = theme.fg(total || state.insideChildId ? "accent" : "dim", "agents");
   const counts = [`${running}/${total}`];
   if (!compact) counts[0] += " running";
   if (waiting) counts.push(theme.fg("warning", `${waiting} waiting`));
+  if (idle) counts.push(`${idle} idle`);
+  if (shutdown) counts.push(`${shutdown} shutdown`);
   if (nested) counts.push(`${nested} nested`);
   if (state.insideChildId) counts.push(`inside ${state.insideChildId}`);
   return `${label} ${theme.fg("dim", counts.join(" · "))}`;
@@ -133,9 +138,20 @@ export function updateStatus(
   status.total = records.length;
   status.waiting = records.filter((r) => r.status === "waiting_for_answer").length;
   status.nested = records.reduce((sum, r) => sum + (r.nestedActiveCount ?? 0), 0);
+  status.idle = records.filter((r) => ["completed", "interrupted", "failed", "aborted"].includes(r.status)).length;
+  status.interrupted = records.filter((r) => r.status === "interrupted" || r.status === "aborted").length;
+  status.errored = records.filter((r) => r.status === "failed").length;
+  status.shutdown = records.filter((r) => r.status === "shutdown").length;
   status.inside = state.insideChildId;
   status.updatedAt = now();
-  for (const listener of status.listeners) listener();
+  for (const listener of status.listeners) {
+    try {
+      listener();
+    } catch {
+      // UI observers never participate in spawn, routing, or teardown success.
+      status.listeners.delete(listener);
+    }
+  }
 
   if (!ctx?.hasUI) return;
   ctx.ui.setStatus(EXTENSION_KEY, subagentStatusText(state, ctx.ui.theme));

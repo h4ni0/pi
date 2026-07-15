@@ -94,6 +94,7 @@ export async function generateHandoffSummary(
   signal?: AbortSignal,
   thinkingLevel?: ThinkingLevel,
 ): Promise<string> {
+  throwIfAborted(signal);
   const sessionContext = buildSessionContext(ctx.sessionManager.getBranch());
   const messages = selectRecentMessages(
     sessionContext.messages,
@@ -123,6 +124,7 @@ export async function generateHandoffSummary(
   if (model) {
     try {
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      throwIfAborted(signal);
       if (auth.ok) {
         let summary = await generateSummary(
           messages,
@@ -135,21 +137,32 @@ export async function generateHandoffSummary(
           undefined,
           thinkingLevel,
         );
+        throwIfAborted(signal);
         const maxSummaryBytes = settings.handoffTokenBudget * 4;
         if (bytes(summary) > maxSummaryBytes)
           summary = deterministicSummary(summary, maxSummaryBytes);
         return `Note: This is an ephemeral compacted summary of the immediate parent context, not the full transcript.\n\n${summary}`;
       }
-    } catch {
-      // Fall back to deterministic serialization below.
+    } catch (error) {
+      if (signal?.aborted || (error instanceof Error && error.name === "AbortError"))
+        throw error;
+      // Fall back only for genuine summarizer/auth failures.
     }
   }
 
+  throwIfAborted(signal);
   return [
     "Note: This is an ephemeral compacted summary of the immediate parent context, not the full transcript.",
     "",
     fallbackHandoffSummary(messages, settings.handoffTokenBudget * 4),
   ].join("\n");
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const error = new Error("Handoff summary aborted");
+  error.name = "AbortError";
+  throw error;
 }
 
 export function deterministicSummary(text: string, maxBytes: number): string {

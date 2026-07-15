@@ -16,9 +16,11 @@ export class OneLineList implements Component {
 export function statusRank(status: SubagentStatus): number {
   return status === "waiting_for_answer"
     ? 0
-    : status === "running" || status === "starting"
+    : status === "running" || status === "starting" || status === "queued"
       ? 1
-      : 2;
+      : status === "completed" || status === "interrupted" || status === "failed"
+        ? 2
+        : 3;
 }
 
 export function fitAnsi(line: string, width: number): string {
@@ -78,5 +80,9 @@ export function statusText(status: SubagentStatus, theme: Theme): string {
       return theme.fg("error", "failed");
     case "aborted":
       return theme.fg("warning", "aborted");
+    case "interrupted":
+      return theme.fg("warning", "interrupted");
+    case "shutdown":
+      return theme.fg("dim", "shutdown");
   }
 }
