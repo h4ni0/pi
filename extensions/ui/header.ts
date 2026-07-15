@@ -1,4 +1,4 @@
-import { chatGptFiveHourLimitLabel } from "./chatgptUsage.ts";
+import { chatGptWeeklyLimitLabel } from "./chatgptUsage.ts";
 import { bold, color, padToWidth, ratioProgressBar } from "./formatting.ts";
 import { state } from "./state.ts";
 import { subagentsLabel } from "./subagents.ts";
@@ -76,7 +76,7 @@ export function buildHeader(width: number): string {
     " " +
     contextProgressBar();
   const subagents = subagentsLabel();
-  const chatGptLimit = chatGptFiveHourLimitLabel();
+  const chatGptLimit = chatGptWeeklyLimitLabel();
   const parts = [folder, branch, model, context];
   if (subagents) parts.push(subagents);
   if (chatGptLimit) parts.push(chatGptLimit);

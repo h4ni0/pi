@@ -30,7 +30,7 @@ export function updateState(ctx: ExtensionContext, pi: ExtensionAPI): void {
   state.contextTokens =
     ctx.getContextUsage?.()?.tokens ?? state.contextTokens ?? 0;
   if (!isOpenAICodexProvider(state.provider)) {
-    state.chatGptFiveHourUsedPercent = undefined;
+    state.chatGptWeeklyUsedPercent = undefined;
     state.chatGptUsageProvider = undefined;
   }
 }

@@ -21,7 +21,7 @@ export type HeaderState = {
   getSessionName?: () => string | undefined;
   contextTokens?: number;
   contextWindow?: number;
-  chatGptFiveHourUsedPercent?: number;
+  chatGptWeeklyUsedPercent?: number;
   chatGptUsageProvider?: string;
 };
 
