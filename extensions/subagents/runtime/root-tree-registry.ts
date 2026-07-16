@@ -302,7 +302,8 @@ export class RootTreeRegistry {
           ? candidateTransition
           : undefined;
         return Promise.resolve({
-          message: "Wait completed.",
+          message:
+            `Agent '${target.path}' is already inactive; there is no active turn to wait for.`,
           timed_out: false,
           completed: [
             latestTransition
@@ -1665,7 +1666,7 @@ function currentTerminalDetails(
 
 function emptyWaitResult(): WaitAgentResultDetails {
   return {
-    message: "No agents to wait for.",
+    message: "There are no active agents to wait for.",
     timed_out: false,
     completed: [],
     pending: [],

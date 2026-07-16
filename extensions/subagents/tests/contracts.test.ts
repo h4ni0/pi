@@ -476,6 +476,7 @@ describe("tool descriptions and prompt guidance", () => {
       "For agent completion, use {} for ANY, target for one agent, or all:true for ALL; these modes have no time limit.",
       "Never use seconds to poll or wait for agents. `{seconds}` is a standalone clock delay only.",
       "Later spawns are never added to an existing agent wait.",
+      "If no selected agent has an active turn, wait_agent returns immediately and says there are no active agents to wait for.",
       "The user-requested terminal wait modes are Pi's second intentional Codex-v2 divergence alongside depth enforcement.",
     ]);
     const theme = {

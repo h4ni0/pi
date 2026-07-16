@@ -93,7 +93,7 @@ describe("registry wait_agent snapshots", () => {
     expect(first.completed.map((item) => item.agent_name)).toEqual([b.path]);
     expect(second.completed.map((item) => item.agent_name)).toEqual([a.path]);
     expect(empty).toMatchObject({
-      message: "No agents to wait for.",
+      message: "There are no active agents to wait for.",
       timed_out: false,
       completed: [],
       pending: [],
@@ -171,6 +171,9 @@ describe("registry wait_agent snapshots", () => {
     finish(tree, b, "interrupted");
 
     const targeted = await tree.wait(a, { target: "opaque-b" });
+    expect(targeted.message).toBe(
+      "Agent '/root/b' is already inactive; there is no active turn to wait for.",
+    );
     expect(targeted.completed[0]).toMatchObject({
       agent_name: b.path,
       agent_status: "interrupted",
@@ -200,8 +203,13 @@ describe("registry wait_agent snapshots", () => {
     expect(tree.get(child.path)?.activeEpoch).toBe(2);
   });
 
-  test("all:true waits indefinitely for only its captured nonterminal descendants", async () => {
+  test("all:true returns immediately when empty, otherwise waits for captured active descendants", async () => {
     const tree = registry();
+    expect(await tree.wait(tree.identity("/root"), { all: true })).toMatchObject({
+      message: "There are no active agents to wait for.",
+      completed: [],
+      pending: [],
+    });
     const a = reserve(tree, "/root", "a");
     const b = reserve(tree, "/root", "b");
     const waiting = tree.wait(tree.identity("/root"), { all: true });
@@ -343,7 +351,7 @@ describe("registry wait_agent snapshots", () => {
       connection_generation: 1,
     });
     expect(await tree.wait(root, {})).toMatchObject({
-      message: "No agents to wait for.",
+      message: "There are no active agents to wait for.",
       completed: [],
     });
   });
@@ -383,7 +391,7 @@ describe("registry wait_agent snapshots", () => {
       });
     }
     expect(await tree.wait(root, {})).toMatchObject({
-      message: "No agents to wait for.",
+      message: "There are no active agents to wait for.",
       completed: [],
     });
   });
