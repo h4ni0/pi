@@ -476,6 +476,115 @@ describe("broker wait_agent cleanup", () => {
       timed_out: false,
       completed: [{ agent_name: targetGrant.path, agent_status: "not_found" }],
     });
+  });
 
+  test("target wait observes a reloaded follow-up completion after transient shutdown", async () => {
+    let reloadedGrandchild: RootTreeBroker;
+    const root = await RootTreeBroker.createRoot({
+      identity: { id: "root-id", path: "/root", depth: 0, maxDepth: 3 },
+      maxResidentAgents: 4,
+      maxActiveAgents: 4,
+      dispatch: async () => ({}),
+    });
+    brokers.push(root);
+    const parentGrant = await root.reserveChild({
+      id: "parent-id",
+      taskName: "parent",
+      maxDepth: 3,
+      lastTaskMessage: "parent",
+      reloadable: true,
+    });
+    const parent = await RootTreeBroker.connectChild({
+      identity: {
+        id: "parent-id",
+        path: parentGrant.path,
+        parentId: "root-id",
+        parentPath: "/root",
+        depth: 1,
+        maxDepth: 3,
+        connectionGeneration: parentGrant.generation,
+      },
+      maxResidentAgents: 4,
+      maxActiveAgents: 4,
+      socketPath: root.endpoint!.socketPath,
+      capability: parentGrant.capability,
+      dispatch: async (message) => {
+        if (message.op === "reload") {
+          const grant = message.payload.broker;
+          reloadedGrandchild = await RootTreeBroker.connectChild({
+            identity: {
+              id: "grand-id",
+              path: "/root/parent/grand",
+              parentId: "parent-id",
+              parentPath: "/root/parent",
+              depth: 2,
+              maxDepth: 3,
+              connectionGeneration: grant.generation,
+            },
+            maxResidentAgents: 4,
+            maxActiveAgents: 4,
+            socketPath: grant.socketPath,
+            capability: grant.capability,
+            dispatch: async () => ({}),
+          });
+          brokers.push(reloadedGrandchild);
+        }
+        return {};
+      },
+    });
+    brokers.push(parent);
+    const grandGrant = await parent.reserveChild({
+      id: "grand-id",
+      taskName: "grand",
+      maxDepth: 3,
+      lastTaskMessage: "first",
+      reloadable: true,
+    });
+    const grandchild = await RootTreeBroker.connectChild({
+      identity: {
+        id: "grand-id",
+        path: grandGrant.path,
+        parentId: "parent-id",
+        parentPath: parentGrant.path,
+        depth: 2,
+        maxDepth: 3,
+        connectionGeneration: grandGrant.generation,
+      },
+      maxResidentAgents: 4,
+      maxActiveAgents: 4,
+      socketPath: root.endpoint!.socketPath,
+      capability: grandGrant.capability,
+      dispatch: async () => ({}),
+    });
+    brokers.push(grandchild);
+
+    await parent.updateAgent(grandGrant.path, {
+      status: { completed: "first" },
+      active: false,
+    }, 1);
+    await parent.updateAgent(grandGrant.path, { resident: false });
+    await parent.route("followup", grandGrant.path, "second");
+
+    const waiting = parent.waitAgent({ target: grandGrant.path });
+    for (
+      let attempt = 0;
+      attempt < 50 && (root.serverSecurityCounts?.waiters ?? 0) !== 1;
+      attempt++
+    ) await delay(2);
+    expect(root.serverSecurityCounts?.waiters).toBe(1);
+
+    await parent.updateAgent(grandGrant.path, {
+      status: { completed: "second" },
+      active: false,
+    }, 2);
+    expect(await waiting).toMatchObject({
+      completed: [{
+        agent_name: grandGrant.path,
+        agent_status: { completed: "second" },
+        active_epoch: 2,
+        connection_generation: 2,
+      }],
+      pending: [],
+    });
   });
 });

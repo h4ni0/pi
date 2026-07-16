@@ -998,7 +998,8 @@ export class RootTreeRegistry {
       !beforeWasTerminal &&
       prior?.agentId === before.id &&
       prior.activeEpoch === transitionEpoch &&
-      prior.connectionGeneration === before.connectionGeneration
+      prior.connectionGeneration === before.connectionGeneration &&
+      terminalStatusesEqual(prior.status, after.status as TerminalAgentStatus)
     ) return;
     const ancestorIds: string[] = [];
     let parentPath = before.parentPath;
