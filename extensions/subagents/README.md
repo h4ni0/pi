@@ -7,7 +7,7 @@ This is Pi's single collaboration-manager entry point. Its canonical contract fo
 - `spawn_agent`: asynchronously starts a persistent, reusable agent. `task_name` becomes a canonical path beneath the caller; `fork_turns` is omitted/`all`, `none`, or a positive integer string.
 - `send_message`: sends to any same-tree target without waking an idle agent.
 - `followup_task`: reuses an existing non-root agent and triggers a turn when idle.
-- `wait_agent`: waits on an atomic identity/epoch snapshot. `{}`, `{target}`, and `{all:true}` wait indefinitely for ANY/target/ALL completion. Agent waits never take time limits. `{seconds:1..3600}` is a separate clock delay that does not inspect agents; later spawns are excluded from agent snapshots.
+- `wait_agent`: waits on an atomic identity/epoch snapshot. `{}`, `{target}`, and `{all:true}` wait indefinitely for ANY/target/ALL completion. Agent waits never take time limits. `{seconds:1..3600}` is a separate clock delay that does not inspect agents; later spawns are excluded from agent snapshots. A matching direct-child final returned by an explicit wait is acknowledged there and is not redelivered as a separate inbox turn.
 - `interrupt_agent`: soft, non-cascading turn interrupt; the agent remains reusable.
 - `list_agents`: lists only live/resident agents across the current root tree.
 

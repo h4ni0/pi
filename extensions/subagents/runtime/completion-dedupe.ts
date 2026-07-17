@@ -44,6 +44,13 @@ export class CompletionDedupeLedger {
     return "new";
   }
 
+  pendingAfterTerminalEventId(
+    agentPath: string,
+    epoch: number,
+  ): string | undefined {
+    return this.state(agentPath).expectedAfterTerminal.get(epoch);
+  }
+
   /** Record acknowledged recipient queue ownership. */
   accept(agentPath: string, epoch: number, eventId: string): void {
     const state = this.state(agentPath);

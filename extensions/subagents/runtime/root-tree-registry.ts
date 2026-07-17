@@ -204,6 +204,27 @@ export class RootTreeRegistry {
     return this.waiters.size;
   }
 
+  hasPendingWaitFor(
+    caller: RootTreeIdentity,
+    targetPath: string,
+    activeEpoch: number,
+    connectionGeneration: number,
+  ): boolean {
+    const callerRecord = this.assertCaller(caller);
+    const target = this.requireRecord(targetPath);
+    return [...this.waiters.values()].some(
+      (waiter) =>
+        waiter.callerId === callerRecord.id &&
+        waiter.candidates.some(
+          (candidate) =>
+            candidate.id === target.id &&
+            candidate.path === target.path &&
+            candidate.activeEpoch === activeEpoch &&
+            candidate.connectionGeneration === connectionGeneration,
+        ),
+    );
+  }
+
   get retainedTerminalEventCount(): number {
     return this.terminalEvents.length;
   }

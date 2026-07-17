@@ -453,6 +453,91 @@ describe("durable completion dedupe ledger", () => {
 });
 
 describe("authenticated completion broker", () => {
+  test("an explicit wait owns matching final answers without duplicate inbox turns", async () => {
+    const inbox: any[] = [];
+    const root = await RootTreeBroker.createRoot({
+      identity: { id: "root-id", path: "/root", depth: 0, maxDepth: 2 },
+      maxResidentAgents: 3,
+      maxActiveAgents: 3,
+      dispatch: async (dispatch) => {
+        if (dispatch.op === "inbox") inbox.push(dispatch.payload);
+        return { observed: true };
+      },
+    });
+    brokers.push(root);
+
+    const connectChild = async (id: string, taskName: string) => {
+      const grant = await root.reserveChild({
+        id,
+        taskName,
+        maxDepth: 2,
+        lastTaskMessage: taskName,
+        reloadable: true,
+      });
+      const child = await RootTreeBroker.connectChild({
+        identity: {
+          id,
+          path: grant.path,
+          parentId: "root-id",
+          parentPath: "/root",
+          depth: 1,
+          maxDepth: 2,
+          connectionGeneration: grant.generation,
+        },
+        maxResidentAgents: 3,
+        maxActiveAgents: 3,
+        socketPath: root.endpoint!.socketPath,
+        capability: grant.capability,
+        dispatch: async () => ({}),
+      });
+      brokers.push(child);
+      return { child, grant, completion: brokerCompletionIdentity(id, grant.path, 1) };
+    };
+    const first = await connectChild("wait-child-a", "wait_child_a");
+    const second = await connectChild("wait-child-b", "wait_child_b");
+    const waiting = root.waitAgent({ all: true });
+    for (
+      let attempt = 0;
+      attempt < 50 && (root.serverSecurityCounts?.waiters ?? 0) !== 1;
+      attempt++
+    ) await Bun.sleep(2);
+    expect(root.serverSecurityCounts?.waiters).toBe(1);
+
+    await root.updateAgent(first.grant.path, {
+      active: false,
+      status: { completed: "first" },
+      pendingCompletionEventId: first.completion.eventId,
+    }, 1);
+    expect(await first.child.deliverCompletion({
+      targetPath: "/root",
+      eventId: first.completion.eventId,
+      sender: first.grant.path,
+      content: "first",
+      details: first.completion.details,
+    })).toMatchObject({ observed: true });
+    expect(inbox).toHaveLength(0);
+
+    await root.updateAgent(second.grant.path, {
+      active: false,
+      status: { completed: "second" },
+      pendingCompletionEventId: second.completion.eventId,
+    }, 1);
+    const result = await waiting;
+    expect(result.completed.map((item) => item.agent_name)).toEqual([
+      first.grant.path,
+      second.grant.path,
+    ]);
+    expect(result.pending).toEqual([]);
+    expect(await second.child.deliverCompletion({
+      targetPath: "/root",
+      eventId: second.completion.eventId,
+      sender: second.grant.path,
+      content: "second",
+      details: second.completion.details,
+    })).toMatchObject({ observed: true });
+    expect(inbox).toHaveLength(0);
+  });
+
   test("broker pending completion blocks unload and clearance wakes an owned follow-up", async () => {
     const accepted: any[] = [];
     const deliveries: any[] = [];

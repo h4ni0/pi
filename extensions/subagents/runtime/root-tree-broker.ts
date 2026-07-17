@@ -2188,7 +2188,7 @@ class BrokerServer {
     return this.registry.list(caller, payload?.pathPrefix);
   }
 
-  private wait(
+  private async wait(
     caller: BrokerIdentity,
     payload: any,
     signal?: AbortSignal,
@@ -2196,7 +2196,25 @@ class BrokerServer {
     const input: RootTreeWaitInput = {};
     if (payload?.target !== undefined) input.target = payload.target;
     if (payload?.all !== undefined) input.all = payload.all;
-    return this.registry.wait(caller, input, signal);
+    const result = await this.registry.wait(caller, input, signal);
+    // The wait result itself delivers matching direct-child finals. Claim any
+    // terminal-registered outbox event before its delayed inbox delivery can
+    // create a duplicate parent turn.
+    for (const completed of result.completed) {
+      const child = this.registry.get(completed.agent_name);
+      if (!child || child.parentPath !== caller.path) continue;
+      const eventId = this.completionDedupe.pendingAfterTerminalEventId(
+        child.path,
+        completed.active_epoch,
+      );
+      if (
+        !eventId ||
+        !this.pendingCompletionEventIdsByAgent.get(child.path)?.has(eventId)
+      ) continue;
+      this.completionDedupe.accept(child.path, completed.active_epoch, eventId);
+      this.clearPendingCompletion(this.registry.identity(child.path), eventId);
+    }
+    return result;
   }
 
   private async setCapacity(
@@ -2331,6 +2349,20 @@ class BrokerServer {
     if (Buffer.byteLength(content, "utf8") > 24 * 1024)
       throw new Error("Completion envelope exceeds the hard model-facing limit");
     const details = requireBoundedCompletionDetails(payload?.details);
+    // A still-pending direct-parent wait owns this final answer. Acknowledge
+    // the durable child outbox without also injecting a duplicate inbox turn.
+    if (
+      this.registry.hasPendingWaitFor(
+        this.registry.identity(target.path),
+        caller.path,
+        completionEpoch,
+        senderRecord.connectionGeneration,
+      )
+    ) {
+      this.completionDedupe.accept(caller.path, completionEpoch, eventId);
+      this.clearPendingCompletion(caller, eventId);
+      return { accepted: true, observed: true };
+    }
     const insertion = await this.dispatchToIdentity(
       target.path,
       {
