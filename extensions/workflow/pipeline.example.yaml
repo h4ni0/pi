@@ -1,0 +1,242 @@
+description: "Four-phase engineering workflow: Plan → Execute → Verify end-to-end → Review; review findings loop back to Execute."
+maxTransitions: 16
+phases:
+  - id: plan
+    thinking: xhigh
+    output:
+      type: text
+      description: "Final output must be an XML implementation plan."
+    tools:
+      - read
+      - find
+      - ls
+      - bash
+      - web_search
+      - delegate
+    system: |
+      You are the planning phase of a multi-phase engineering workflow.
+      Inspect files, search, and delegate exploration, but do not modify the worktree.
+      Prefer small focused parallel delegate calls for independent exploration streams so the main phase keeps a compact context.
+    prompt: |
+      Task:
+      {{input}}
+
+      Create a concrete implementation plan for this task.
+
+      Process:
+      1. Identify the repository shape and relevant files. Use read-only shell commands only (for example: git status, git diff, rg, find, ls, test/list commands with dry-run/help when useful).
+      2. Delegate independent exploration streams where useful. Each delegate must be told explicitly: read-only, no edits, return exact file paths, relevant code patterns, risks, and acceptance criteria.
+      3. Use web_search only for current external/library documentation when the codebase does not answer a question and to check up on up-to-date documentation.
+      4. Reply with the final report. Nothing else. No questions, no "Here's the final report:". Only the report content.
+
+  - id: execute
+    thinking: medium
+    output:
+      type: text
+      description: |
+        Concise Markdown execution report with:
+        # Execution Report
+        ## Completed Work
+        ## Files Changed
+        ## Delegates / Streams
+        ## Commands Run
+        ## Deviations From Plan
+        ## Known Risks / Follow-ups for Verify/Review
+    system: |
+      You are the execution/orchestration phase.
+      Decompose the plan and delegate independent implementation streams as much as possible.
+      Prefer not to edit or explore directly unless a tiny coordination fix is safer than another delegate call.
+    prompt: |
+      Original task:
+      {{input}}
+
+      Plan from the previous phase:
+      {{phase.plan.output}}
+
+      Previous end-to-end verification feedback, if this is a re-run after verify failed:
+      {{phase.verify.output?}}
+
+      Previous review feedback, if this is a re-run after review failed:
+      {{phase.review.output?}}
+
+      Execute the plan through coordination and delegation. If previous verification or review feedback is present, focus on remediating those failures before making unrelated changes.
+
+  - id: verify
+    thinking: medium
+    output:
+      type: structured
+      status:
+        enum: [PASS, FAIL]
+        description: "PASS when the implementation works end-to-end from the user's perspective and shows no evidence of cheating; FAIL when remediation is required."
+      report:
+        description: |
+          Markdown end-to-end verification report with:
+          # Verification Report
+          ## Result
+          PASS or FAIL, with a one-sentence reason.
+          ## End-User Scenarios Tested
+          - scenario, method, status, evidence
+          ## Frontend Verification
+          - browser flows tested with playwright-cli, screenshots/snapshots/console/network evidence, or why not applicable
+          ## Backend / Data Verification
+          - database queries, API checks, logs inspected, or why not applicable
+          ## Anti-Cheat / Implementation Integrity Check
+          - evidence that behavior is genuinely implemented rather than hard-coded/test-specific
+          ## Failures Requiring Remediation
+          - exact reproduction steps, observed vs expected result, evidence, proposed remediation
+          ## Unverified Items
+          - anything that could not be checked and why
+      data:
+        description: "Machine-readable verification coverage."
+        fields:
+          frontendTested:
+            type: boolean
+            description: "True when a browser/user-flow check was applicable and performed."
+          backendTested:
+            type: boolean
+            description: "True when backend/API/database/log checks were applicable and performed."
+          cheatChecksPassed:
+            type: boolean
+            description: "True when no hard-coded or test-specific cheat implementation was found."
+    next:
+      - if:
+          status: FAIL
+        goto: execute
+      - if:
+          status: PASS
+        goto: review
+      - end: true
+    tools:
+      - read
+      - find
+      - ls
+      - bash
+      - delegate
+    system: |
+      You are the end-to-end verification phase.
+      Do not edit files. Verify the implemented behavior from an end user's perspective and report actionable failures.
+      This is not a code hygiene or architecture review; leave those concerns to the review phase.
+      You may inspect code only to understand how to exercise behavior and to detect cheat implementations such as hard-coded checks, test-specific branches, mocked success paths, or bypassed business logic.
+      Delegate independent verification streams where useful, but keep all delegates read-only/no-edits.
+    prompt: |
+      Original task:
+      {{input}}
+
+      Plan:
+      {{phase.plan.output}}
+
+      Execution report:
+      {{phase.execute.output}}
+
+      Verify the end result.
+
+      Process:
+      1. Determine what user-visible behavior or system outcome the plan promised. Derive concrete acceptance scenarios from the plan and execution report.
+      2. Inspect the current diff and relevant implementation only enough to:
+         - identify how to run the product end-to-end,
+         - understand changed frontend/backend surfaces,
+         - verify no hard-coded/test-specific shortcuts or fake success paths were used.
+      3. For frontend or browser-visible changes, use the playwright-cli skill patterns through bash. Prefer commands such as:
+         - `playwright-cli open <url>` or `npx --no-install playwright-cli open <url>`
+         - `playwright-cli snapshot`, `click`, `fill`, `press`, `requests`, `console`, `eval`, and `close`
+         Test the actual user flow, capture snapshots/console/network evidence, and verify behavior matches the plan.
+      4. For backend, API, database, queue, or background-job changes, verify through the strongest practical end-to-end signals:
+         - call the real local/dev API or command path,
+         - query the relevant local/dev/test database tables using project-standard commands,
+         - inspect backend logs for successful processing and absence of errors,
+         - verify persisted state or emitted side effects.
+         Do not perform destructive production operations.
+      5. Run standard automated tests only as supporting evidence; do not treat unit/type/lint success as sufficient if an end-to-end check is practical.
+      6. If a required environment, server, database, credentials, or browser session is unavailable, explain the blocker and perform the strongest safe substitute check.
+      7. Do not fix failures. Produce precise remediation tasks for the next execution pass.
+
+  - id: review
+    thinking: high
+    output:
+      type: structured
+      status:
+        enum: [PASS, FAIL]
+        description: "PASS when no judge-approved blocking review findings remain; FAIL when review comments require remediation."
+      report:
+        description: |
+          Markdown review report with:
+          # Review Report
+          ## Verdict
+          PASS if no judge-approved blocking findings remain; otherwise FAIL.
+          ## Review Method
+          - changed files source, bug-hunter orderings, delegates run, fallback path if any
+          ## Judge-Approved Findings
+          For each finding:
+          - Severity: critical/high/medium
+          - Category: bug/security/architecture
+          - File/line
+          - Problem
+          - Evidence
+          - Recommended fix
+          - Consensus/fact-check/judge notes
+          ## Dropped Findings
+          - single-pass bug-hunter findings, rejected fact-checks, judge-dropped noise, duplicates/non-blockers
+          ## Notes
+          - anything important for the next execution pass
+      data:
+        description: "Machine-readable review outcome."
+        fields:
+          findingCount:
+            type: integer
+            description: "Number of judge-approved findings requiring remediation."
+    next:
+      - if:
+          status: FAIL
+        goto: execute
+      - end: true
+    tools:
+      - read
+      - find
+      - ls
+      - bash
+      - delegate
+    system: |
+      You are the final code review phase.
+      Do not edit files and do not post comments externally. Run a strict multi-agent-style review and return only verified, actionable findings in the phase report.
+      This phase follows the multi-agent PR review flow defined below: bug-hunter consensus, architecture/security reviewers, fact-checker, and judge quality gate.
+      Do not duplicate end-to-end verification work; focus on code correctness, architecture/API contracts, and security.
+    prompt: |
+      Original task:
+      {{input}}
+
+      Plan:
+      {{phase.plan.output}}
+
+      Execution report:
+      {{phase.execute.output}}
+
+      End-to-end verification report:
+      {{phase.verify.output}}
+
+      Review the completed work using the multi-agent flow defined below, adapted to this local workflow. Do not post to GitHub, PostHog, or any external service; return a report only.
+
+      Process:
+      1. Determine changed files against the default branch (`main` first, then `master`). Inspect PR/task context, current diff, and changed file list. If no default branch exists, use the strongest available git diff/status baseline and explain it.
+      2. Spawn 6 ready-only agents in parallel:
+         - 4 Bug-Hunters and give them different file ordering.
+         - Architecture Reviewer.
+         - Security Reviewer.
+      3. For every initial delegate:
+         - Provide original task, plan, execution report, verification report, repo root, and the changed file list/order.
+         - Tell it explicitly: read-only/no edits;
+      7. Consensus aggregation for bug hunters:
+         - Collect all findings from the 4 bug-hunter passes.
+         - Group findings that describe the same issue: same file, line within 5 lines, and semantically similar problem.
+         - Keep only bug findings flagged by 2 or more independent bug-hunter passes.
+         - Drop single-pass bug findings.
+         - Merge surviving consensus bug findings into canonical entries with the most precise file/line and description.
+      8. Combine consensus bug findings with architecture and security findings, then filter strictly:
+         - Drop trivial nits, style preferences, vague concerns, comments that merely describe code, and "consider doing X" suggestions without a concrete failure.
+         - Keep specific bugs, security vulnerabilities, and architectural/API/data issues that can cause concrete failures.
+      9. Spawn a read-only fact-checker delegate with the surviving candidates. It must read actual source code and return for each finding exactly: VERIFIED, VERIFIED_ADJUSTED, or REJECTED, with corrected line/body if adjusted. Keep only VERIFIED and VERIFIED_ADJUSTED. Drop uncertain findings.
+      10. Spawn a read-only judge delegate with the fact-checked findings and proposed comment bodies. It applies the judge gates defined below:
+          - Severity gate: keep critical findings; drop warnings unless they realistically lead to data loss/corruption, security breach, production outage/crash, or observable race-condition impact.
+          - Quality gate: comments must be succinct (1-3 sentences), accurate, and actionable.
+          - Verdicts: PASS keep as-is, REWRITE use rewritten body, DROP remove.
+      11. Synthesize the final report. Status PASS only if zero judge-approved findings remain. Status FAIL if one or more judge-approved findings remain and must be addressed.
+
